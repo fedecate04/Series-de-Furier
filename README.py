@@ -45,11 +45,11 @@ st.markdown(
 )
 
 # =============== UTILIDADES ===============
+# =============== UTILIDADES ===============
 SAFE_NS = {
     # constantes
-    "pi": np.pi,
-    "e": np.e,
-    # funciones numpy
+    "pi": np.pi, "e": np.e,
+    # funciones numpy (inglés)
     "sin": np.sin, "cos": np.cos, "tan": np.tan,
     "sinh": np.sinh, "cosh": np.cosh, "tanh": np.tanh,
     "arcsin": np.arcsin, "arccos": np.arccos, "arctan": np.arctan,
@@ -57,9 +57,35 @@ SAFE_NS = {
     "sqrt": np.sqrt, "abs": np.abs, "sign": np.sign,
     "heaviside": np.heaviside, "where": np.where,
     "mod": np.mod, "floor": np.floor, "ceil": np.ceil,
-    # señales de scipy.signal
-    "sawtooth": sawtooth,  # diente de sierra: sawtooth(2*pi*f*t, width)
-    "square": square,      # cuadrada: square(2*pi*f*t, duty)
+    # señales scipy (inglés)
+    "sawtooth": sawtooth,
+    "square": square,
+    # ===== alias en español =====
+    "seno": np.sin,
+    "coseno": np.cos,
+    "tangente": np.tan,
+    "senh": np.sinh,
+    "cosh": np.cosh,
+    "tanh": np.tanh,
+    "arcseno": np.arcsin,
+    "arccoseno": np.arccos,
+    "arctangente": np.arctan,
+    "exponencial": np.exp,
+    "logaritmo": np.log,
+    "logaritmo10": np.log10,
+    "raiz": np.sqrt,
+    "valor_absoluto": np.abs,
+    "signo": np.sign,
+    "escalon": np.heaviside,      # escalon(x, 0.5) para valor en 0
+    "si": np.where,                # si(cond, v1, v2) == where(cond, v1, v2)
+    "modulo": np.mod,
+    "piso": np.floor,
+    "techo": np.ceil,
+    # ondas en español
+    "sierra": sawtooth,            # diente de sierra
+    "triangular": lambda x, width=0.5: sawtooth(x, width=width),
+    "cuadrada": square,
+    "pulso": lambda x, duty=0.5: (square(x, duty=duty) + 1)/2.0
 }
 
 def eval_func_expression(expr: str, t: np.ndarray, extra_ns: dict = None) -> np.ndarray:
@@ -275,68 +301,159 @@ with st.expander("USO DE LA APLICACIÓN", expanded=False):
         """
     )
 
-# =============== ENTRADA DE SEÑAL ===============
+# =============== ENTRADA / SEÑAL ===============
+# Malla temporal en [0, T] con M puntos
 t = np.linspace(0.0, float(T), int(M), endpoint=False)
+
+st.markdown("### Elegí el modo de entrada")
+entrada_modo = st.radio(
+    "Cómo querés definir f(t):",
+    ["Constructor simple (recomendado)", "Expresión avanzada (en español)"],
+    index=0,
+    help="El constructor te deja combinar ondas predefinidas; la expresión te permite escribir f(t) con nombres en español."
+)
+
+def componente(t, tipo, A, f_hz, fase, duty, offset):
+    """Genera una componente según 'tipo'."""
+    w = 2*np.pi*f_hz
+    x = w*t + fase
+    if tipo == "Seno":
+        y = A * np.sin(x)
+    elif tipo == "Coseno":
+        y = A * np.cos(x)
+    elif tipo == "Cuadrada":
+        y = A * square(x)
+    elif tipo == "Triangular":
+        y = A * sawtooth(x, width=0.5)
+    elif tipo == "Diente de sierra":
+        y = A * sawtooth(x, width=duty)    # duty controla el ancho de subida
+    elif tipo == "Pulso":
+        y = A * ((square(x, duty=duty)+1)/2.0)  # 0..A
+    elif tipo == "Constante":
+        y = A * np.ones_like(t)
+    else:
+        y = np.zeros_like(t)
+    return y + offset
+
 f_vals = None
 expr_used = None
 data_uploaded = False
 
-if input_mode == "Analítica (expresión)":
+if entrada_modo == "Constructor simple (recomendado)":
+    st.markdown("#### Constructor de señal (sumador de componentes)")
+    st.caption("Consejo: usá la frecuencia fundamental f₀ = 1/T si querés una serie en armónicos enteros.")
+
+    f0 = 1.0/float(T)
+    n_comp = st.slider("Número de componentes", 1, 6, 2)
+    suma = np.zeros_like(t)
+
+    # Crear controles por componente
+    for i in range(n_comp):
+        st.markdown(f"**Componente {i+1}**")
+        c1, c2, c3, c4 = st.columns([1.2,1,1,1])
+        with c1:
+            tipo = st.selectbox(
+                "Tipo",
+                ["Seno", "Coseno", "Cuadrada", "Triangular", "Diente de sierra", "Pulso", "Constante"],
+                key=f"tipo_{i}"
+            )
+        with c2:
+            A = st.number_input("Amplitud A", value=1.0, step=0.1, format="%.6f", key=f"A_{i}")
+            fase = st.number_input("Fase φ (rad)", value=0.0, step=0.1, format="%.6f", key=f"fase_{i}")
+        with c3:
+            f_hz = st.number_input("Frecuencia (Hz)", value=float(f0), step=float(f0), format="%.6f", key=f"f_{i}")
+            offset = st.number_input("Offset", value=0.0, step=0.1, format="%.6f", key=f"off_{i}")
+        with c4:
+            duty = st.slider("Duty", 1, 99, 50, key=f"duty_{i}")/100.0 if tipo in ("Diente de sierra","Pulso") else 0.5
+            st.write("")  # espacio
+
+        suma += componente(t, tipo, A, f_hz, fase, duty, offset)
+
+    f_vals = suma
+    st.success("Señal generada con el constructor.")
+
+    with st.expander("Ver fórmula equivalente (aproximada)"):
+        # Texto pedagógico simple (no exacto si hay triángulo/sierra/pulso)
+        st.markdown(
+            "La señal se construyó sumando componentes. Si todas fueran senos/cosenos, "
+            "una forma típica sería `Σ A_i * cos(2π f_i t + φ_i) + offset_i`."
+        )
+
+else:
+    # ======= Modo EXPRESIÓN (en español) =======
+    st.markdown("#### f(t) – Expresión (en español)")
+    st.markdown(
+        """
+**Ejemplos:**
+- `seno(2*pi*(1/T)*t)`  
+- `si(t<T/2, 1, -1)`  ← (equivale a where)  
+- `cuadrada(2*pi*(1/T)*t, duty=0.5)`  
+- `pulso(2*pi*(1/T)*t, duty=0.25)`  
+- `triangular(2*pi*(1/T)*t)` o `sierra(2*pi*(1/T)*t, width=0.3)`  
+- `escalon(t-0.5*T, 0.5)`  (valor 0.5 en discontinuidad)
+        """
+    )
+
+    # plantillas también disponibles aquí
+    preset = st.selectbox(
+        "Plantillas rápidas",
+        ["— Ninguna —", "Cuadrada (±1, duty 50%)", "Triangular (±1)", "Diente de sierra (±1)", "Pulso (0/1) duty 25%", "Coseno base (A=1)"],
+        index=0
+    )
+    duty_q = st.slider("Duty para plantillas (si aplica)", 1, 99, 50)/100.0
     default_expr = ""
     if preset == "Cuadrada (±1, duty 50%)":
-        default_expr = f"square(2*pi*(1/{T})*t, duty=0.5)"
+        default_expr = f"cuadrada(2*pi*(1/T)*t, duty=0.5)"
     elif preset == "Triangular (±1)":
-        default_expr = f"sawtooth(2*pi*(1/{T})*t, width=0.5)"
+        default_expr = f"triangular(2*pi*(1/T)*t)"
     elif preset == "Diente de sierra (±1)":
-        default_expr = f"sawtooth(2*pi*(1/{T})*t, width={duty})"
-    elif preset == "Pulso (0/1) con duty":
-        default_expr = f"(square(2*pi*(1/{T})*t, duty={duty})+1)/2"
-    elif preset == "Coseno base (amplitud 1)":
-        default_expr = f"cos(2*pi*(1/{T})*t)"
+        default_expr = f"sierra(2*pi*(1/T)*t, width={duty_q})"
+    elif preset == "Pulso (0/1) duty 25%":
+        default_expr = f"pulso(2*pi*(1/T)*t, duty=0.25)"
+    elif preset == "Coseno base (A=1)":
+        default_expr = f"coseno(2*pi*(1/T)*t)"
 
-    st.markdown("#### f(t) analítica")
     expr = st.text_area(
-        "Ingrese la expresión de f(t) (puede usar funciones numpy seguras)",
+        "Ingrese la expresión de f(t)",
         value=default_expr,
-        height=80,
-        help="Ejemplos: sin(2*pi*(1/T)*t), where(t<T/2, 1, -1), (square(2*pi*(1/T)*t)+1)/2"
+        height=90,
+        help="Usá nombres en español: seno, coseno, si(cond, v1, v2), escalon(x,0.5), cuadrada(x,duty), pulso(x,duty), triangular(x), sierra(x,width)."
     )
     if expr.strip():
         try:
             f_vals = eval_func_expression(expr, t, extra_ns={"T": T})
             expr_used = expr
+            st.success("Expresión evaluada correctamente.")
         except Exception as ex:
             st.error(str(ex))
-else:
-    st.markdown("#### Cargar datos (CSV con columnas t,y)")
-    up = st.file_uploader("Archivo CSV", type=["csv"])
-    if up is not None:
-        try:
-            df = pd.read_csv(up)
-            # Intentar detectar columnas
-            cols = [c.lower() for c in df.columns]
-            col_t = df.columns[cols.index("t")] if "t" in cols else df.columns[0]
-            col_y = df.columns[cols.index("y")] if "y" in cols else df.columns[1]
-            t_raw = df[col_t].to_numpy(dtype=float)
-            y_raw = df[col_y].to_numpy(dtype=float)
-            # Remuestrear a malla uniforme en [0,T]
-            if t_raw.min() < 0:
-                t_raw = t_raw - t_raw.min()
-            # si T no coincide, normalizar un período:
-            span = t_raw.max() - t_raw.min()
-            if abs(span - T) > 1e-9:
-                # Ajustar al rango [0,T] por interpolación lineal sobre un período estimado
-                # Asumimos que el CSV cubre al menos un período.
-                t_norm = (t_raw - t_raw.min()) * (T / span)
-                y_interp = np.interp(t, t_norm, y_raw)
-                f_vals = y_interp
-            else:
-                y_interp = np.interp(t, t_raw, y_raw)
-                f_vals = y_interp
-            data_uploaded = True
-            st.success("Datos cargados y remuestreados correctamente.")
-        except Exception as ex:
-            st.error(f"Error leyendo CSV: {ex}")
+
+# (Opcional) Entrada por CSV se mantiene igual que antes:
+st.markdown("#### O cargar datos (CSV con columnas t,y) en lugar de definir f(t)")
+up = st.file_uploader("Archivo CSV", type=["csv"])
+if up is not None:
+    try:
+        df = pd.read_csv(up)
+        cols = [c.lower() for c in df.columns]
+        col_t = df.columns[cols.index("t")] if "t" in cols else df.columns[0]
+        col_y = df.columns[cols.index("y")] if "y" in cols else df.columns[1]
+        t_raw = df[col_t].to_numpy(dtype=float)
+        y_raw = df[col_y].to_numpy(dtype=float)
+        if t_raw.min() < 0:  # normalizar inicio en 0
+            t_raw = t_raw - t_raw.min()
+        span = t_raw.max() - t_raw.min()
+        if abs(span - T) > 1e-9:
+            t_norm = (t_raw - t_raw.min()) * (T / span)
+            y_interp = np.interp(t, t_norm, y_raw)
+        else:
+            y_interp = np.interp(t, t_raw, y_raw)
+        f_vals = y_interp
+        expr_used = None
+        data_uploaded = True
+        st.success("Datos cargados y remuestreados correctamente.")
+    except Exception as ex:
+        st.error(f"Error leyendo CSV: {ex}")
+
+
 
 # =============== CÁLCULO Y PESTAÑAS DE RESULTADOS ===============
 tabs = st.tabs(["Resultados", "Coeficientes", "Espectro", "Armónicos", "Exportar PDF"])
